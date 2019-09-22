@@ -12,6 +12,7 @@ from nucypher.cli.main import nucypher_cli
 from nucypher.config.characters import BobConfiguration
 from nucypher.crypto.kits import UmbralMessageKit
 from nucypher.crypto.powers import SigningPower
+from nucypher.utilities.logging import GlobalLoggerSettings
 from nucypher.utilities.sandbox.constants import INSECURE_DEVELOPMENT_PASSWORD, \
     MOCK_IP_ADDRESS, MOCK_CUSTOM_INSTALLATION_PATH, TEMPORARY_DOMAIN
 
@@ -34,6 +35,7 @@ def test_bob_public_keys(click_runner):
     assert result.exit_code == 0
     assert "bob_encrypting_key" in result.output
     assert "bob_verifying_key" in result.output
+
 
 log = Logger()
 
@@ -179,11 +181,16 @@ def test_bob_retrieves_twice_via_cli(click_runner,
 
     _old_make_character_function = actions.make_cli_character
     try:
+
         log.info("Patching make_cli_character with substitute_bob")
         actions.make_cli_character = substitute_bob
 
         # Once...
+        # TODO: Add invocation wrapper #1353
+        GlobalLoggerSettings.stop_console_logging()
         retrieve_response = click_runner.invoke(nucypher_cli, retrieve_args, catch_exceptions=False, env=envvars)
+        GlobalLoggerSettings.start_console_logging()
+
         log.info(f"First retrieval response: {retrieve_response.output}")
         assert retrieve_response.exit_code == 0
 
@@ -192,7 +199,11 @@ def test_bob_retrieves_twice_via_cli(click_runner,
             assert cleartext.encode() == capsule_side_channel.plaintexts[1]
 
         # and again!
+        # TODO: Add invocation wrapper #1353
+        GlobalLoggerSettings.stop_console_logging()
         retrieve_response = click_runner.invoke(nucypher_cli, retrieve_args, catch_exceptions=False, env=envvars)
+        GlobalLoggerSettings.start_console_logging()
+
         log.info(f"Second retrieval response: {retrieve_response.output}")
         assert retrieve_response.exit_code == 0
 
