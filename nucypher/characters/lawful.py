@@ -50,11 +50,9 @@ from nucypher.blockchain.eth.token import WorkTracker
 from nucypher.characters.banners import ALICE_BANNER, BOB_BANNER, ENRICO_BANNER, URSULA_BANNER
 from nucypher.characters.base import Character, Learner
 from nucypher.characters.control.controllers import (
-    AliceJSONController,
-    BobJSONController,
-    EnricoJSONController,
     WebController
 )
+from nucypher.characters.control.interfaces import AliceInterface, BobInterface, EnricoInterface
 from nucypher.config.storages import NodeStorage, ForgetfulNodeStorage
 from nucypher.crypto.api import keccak_digest, encrypt_and_sign
 from nucypher.crypto.constants import PUBLIC_KEY_LENGTH, PUBLIC_ADDRESS_LENGTH
@@ -73,7 +71,7 @@ from nucypher.network.server import ProxyRESTServer, TLSHostingPower, make_rest_
 
 class Alice(Character, BlockchainPolicyAuthor):
     banner = ALICE_BANNER
-    _controller_class = AliceJSONController
+    _interface_class = AliceInterface
     _default_crypto_powerups = [SigningPower, DecryptingPower, DelegatingPower]
 
     def __init__(self,
@@ -263,7 +261,6 @@ class Alice(Character, BlockchainPolicyAuthor):
                 self.remember_node(node=handpicked_ursula)
 
         policy = self.create_policy(bob=bob, label=label, **policy_params)
-        self.log.debug(f"Successfully created {policy} ... ")
 
         #
         # We'll find n Ursulas by default.  It's possible to "play the field" by trying different
@@ -284,12 +281,10 @@ class Alice(Character, BlockchainPolicyAuthor):
                     "know which nodes to use.  Either pass them here or when you make the Policy, "
                     "or run the learning loop on a network with enough Ursulas.".format(policy.n))
 
-        self.log.debug(f"Making arrangements for {policy} ... ")
         policy.make_arrangements(network_middleware=self.network_middleware,
                                  handpicked_ursulas=handpicked_ursulas)
 
         # REST call happens here, as does population of TreasureMap.
-        self.log.debug(f"Enacting {policy} ... ")
         policy.enact(network_middleware=self.network_middleware, publish=publish_treasure_map)
         return policy  # Now with TreasureMap affixed!
 
@@ -353,21 +348,11 @@ class Alice(Character, BlockchainPolicyAuthor):
         )]
         return cleartexts
 
-    # def make_rpc_controller(drone_alice, crash_on_error: bool = False):
-    #     app_name = bytes(drone_alice.stamp).hex()[:6]
-    #     controller = JSONRPCController(app_name=app_name,
-    #                                    character_controller=drone_alice.controller,
-    #                                    crash_on_error=crash_on_error)
-    #
-    #     drone_alice.controller = controller
-    #     alice_rpc_control = controller.make_control_transport(rpc_controller=controller)
-    #     return controller
-
     def make_web_controller(drone_alice, crash_on_error: bool = False):
         app_name = bytes(drone_alice.stamp).hex()[:6]
         controller = WebController(app_name=app_name,
-                                   character_controller=drone_alice.controller,
-                                   crash_on_error=crash_on_error)
+                                   crash_on_error=crash_on_error,
+                                   interface=drone_alice._interface_class(character=drone_alice))
         drone_alice.controller = controller
 
         # Register Flask Decorator
@@ -382,8 +367,7 @@ class Alice(Character, BlockchainPolicyAuthor):
             """
             Character control endpoint for getting Alice's encrypting and signing public keys
             """
-            return controller(interface=controller._internal_controller.public_keys,
-                              control_request=request)
+            return controller(method_name='public_keys', control_request=request)
 
         @alice_flask_control.route("/create_policy", methods=['PUT'])
         def create_policy() -> Response:
@@ -391,8 +375,7 @@ class Alice(Character, BlockchainPolicyAuthor):
             Character control endpoint for creating a policy and making
             arrangements with Ursulas.
             """
-            response = controller(interface=controller._internal_controller.create_policy,
-                                  control_request=request)
+            response = controller(method_name='create_policy', control_request=request)
             return response
 
         @alice_flask_control.route("/decrypt", methods=['POST'])
@@ -400,11 +383,7 @@ class Alice(Character, BlockchainPolicyAuthor):
             """
             Character control endpoint for decryption of Alice's own policy data.
             """
-
-            response = controller(
-                interface=controller._internal_controller.decrypt,
-                control_request=request
-            )
+            response = controller(method_name='decrypt', control_request=request)
             return response
 
         @alice_flask_control.route('/derive_policy_encrypting_key/<label>', methods=['POST'])
@@ -412,9 +391,7 @@ class Alice(Character, BlockchainPolicyAuthor):
             """
             Character control endpoint for deriving a policy encrypting given a unicode label.
             """
-            response = controller(interface=controller._internal_controller.derive_policy_encrypting_key,
-                                  control_request=request,
-                                  label=label)
+            response = controller(method_name='derive_policy_encrypting_key', control_request=request, label=label)
             return response
 
         @alice_flask_control.route("/grant", methods=['PUT'])
@@ -422,7 +399,7 @@ class Alice(Character, BlockchainPolicyAuthor):
             """
             Character control endpoint for policy granting.
             """
-            response = controller(interface=controller._internal_controller.grant, control_request=request)
+            response = controller(method_name='grant', control_request=request)
             return response
 
         @alice_flask_control.route("/revoke", methods=['DELETE'])
@@ -430,8 +407,7 @@ class Alice(Character, BlockchainPolicyAuthor):
             """
             Character control endpoint for policy revocation.
             """
-            response = controller(interface=controller._internal_controller.revoke,
-                                  control_request=request)
+            response = controller(method_name='revoke', control_request=request)
             return response
 
         return controller
@@ -439,7 +415,7 @@ class Alice(Character, BlockchainPolicyAuthor):
 
 class Bob(Character):
     banner = BOB_BANNER
-    _controller_class = BobJSONController
+    _interface_class = BobInterface
 
     _default_crypto_powerups = [SigningPower, DecryptingPower]
 
@@ -686,11 +662,11 @@ class Bob(Character):
                  alice_verifying_key: UmbralPublicKey,
                  label: bytes,
                  enrico: "Enrico" = None,
-                 retain_cfrags: bool=False,
-                 use_attached_cfrags: bool=False,
-                 use_precedent_work_orders: bool=False,
-                 policy_encrypting_key: UmbralPublicKey=None,
-                 treasure_map: Union['TreasureMap', bytes]=None):
+                 retain_cfrags: bool = False,
+                 use_attached_cfrags: bool = False,
+                 use_precedent_work_orders: bool = False,
+                 policy_encrypting_key: UmbralPublicKey = None,
+                 treasure_map: Union['TreasureMap', bytes] = None):
 
         # Try our best to get an UmbralPublicKey from input
         alice_verifying_key = UmbralPublicKey.from_bytes(bytes(alice_verifying_key))
@@ -758,7 +734,8 @@ class Bob(Character):
                         cfrag_in_question = work_order.tasks[capsule].cfrag
                         capsule.attach_cfrag(cfrag_in_question)
                 else:
-                    self.log.warn("Found existing complete WorkOrders, but use_precedent_work_orders is set to False.  To use Bob in 'KMS mode', set retain_cfrags=False as well.")
+                    self.log.warn(
+                        "Found existing complete WorkOrders, but use_precedent_work_orders is set to False.  To use Bob in 'KMS mode', set retain_cfrags=False as well.")
 
         # Part II: Getting the cleartexts.
         cleartexts = []
@@ -841,8 +818,8 @@ class Bob(Character):
 
         app_name = bytes(drone_bob.stamp).hex()[:6]
         controller = WebController(app_name=app_name,
-                                   character_controller=drone_bob.controller,
-                                   crash_on_error=crash_on_error)
+                                   crash_on_error=crash_on_error,
+                                   interface=drone_bob._interface_class(character=drone_bob))
 
         drone_bob.controller = controller.make_control_transport()
 
@@ -858,8 +835,7 @@ class Bob(Character):
             """
             Character control endpoint for getting Bob's encrypting and signing public keys
             """
-            return controller(interface=controller._internal_controller.public_keys,
-                              control_request=request)
+            return controller(method_name='public_keys', control_request=request)
 
         @bob_control.route('/join_policy', methods=['POST'])
         def join_policy():
@@ -868,7 +844,7 @@ class Bob(Character):
 
             This is an unfinished endpoint. You're probably looking for retrieve.
             """
-            return controller(interface=controller._internal_controller.join_policy, control_request=request)
+            return controller(method_name='join_policy', control_request=request)
 
         @bob_control.route('/retrieve', methods=['POST'])
         def retrieve():
@@ -876,7 +852,7 @@ class Bob(Character):
             Character control endpoint for re-encrypting and decrypting policy
             data.
             """
-            return controller(interface=controller._internal_controller.retrieve, control_request=request)
+            return controller(method_name='retrieve', control_request=request)
 
         return controller
 
@@ -938,7 +914,7 @@ class Ursula(Teacher, Character, Worker):
         if domains is None:
             # TODO: Clean up imports
             from nucypher.config.node import CharacterConfiguration
-            domains = {CharacterConfiguration.DEFAULT_DOMAIN}
+            domains = (CharacterConfiguration.DEFAULT_DOMAIN,)
 
         if is_me:
             # If we're federated only, we assume that all other nodes in our domain are as well.
@@ -949,7 +925,6 @@ class Ursula(Teacher, Character, Worker):
                            checksum_address=checksum_address,
                            start_learning_now=False,  # Handled later in this function to avoid race condition
                            federated_only=self._federated_only_instances,
-                           # TODO: 'Ursula' object has no attribute '_federated_only_instances' if an is_me Ursula is not inited prior to this moment
                            crypto_power=crypto_power,
                            abort_on_learning_error=abort_on_learning_error,
                            known_nodes=known_nodes,
@@ -1421,7 +1396,7 @@ class Enrico(Character):
     """A Character that represents a Data Source that encrypts data for some policy's public key"""
 
     banner = ENRICO_BANNER
-    _controller_class = EnricoJSONController
+    _interface_class = EnricoInterface
     _default_crypto_powerups = [SigningPower]
 
     def __init__(self, policy_encrypting_key=None, controller: bool = True, *args, **kwargs):
@@ -1437,7 +1412,7 @@ class Enrico(Character):
 
         self.log = Logger(f'{self.__class__.__name__}-{bytes(self.public_keys(SigningPower)).hex()[:6]}')
         self.log.info(self.banner.format(policy_encrypting_key))
-
+    
     def encrypt_message(self,
                         message: bytes
                         ) -> Tuple[UmbralMessageKit, Signature]:
@@ -1468,8 +1443,8 @@ class Enrico(Character):
 
         app_name = bytes(drone_enrico.stamp).hex()[:6]
         controller = WebController(app_name=app_name,
-                                   character_controller=drone_enrico.controller,
-                                   crash_on_error=crash_on_error)
+                                   crash_on_error=crash_on_error,
+                                   interface=drone_enrico._interface_class(character=drone_enrico))
 
         drone_enrico.controller = controller
 
