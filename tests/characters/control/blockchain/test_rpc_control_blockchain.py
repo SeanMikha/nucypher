@@ -1,20 +1,30 @@
-from base64 import b64encode
-
 import pytest
 
-from nucypher.characters.control.specifications import AliceSpecification, BobSpecification, EnricoSpecification
-from nucypher.characters.lawful import Ursula
-from nucypher.crypto.powers import DecryptingPower, SigningPower
+from base64 import b64encode
 from nucypher.policy.collections import TreasureMap
+from nucypher.crypto.powers import DecryptingPower, SigningPower
+from nucypher.characters.lawful import Ursula
+from nucypher.characters.control.interfaces import AliceInterface, BobInterface, EnricoInterface
 
-alice_specification = AliceSpecification()
-bob_specification = BobSpecification()
-enrico_specification = EnricoSpecification()
+
+def get_fields(interface, method_name):
+
+    spec = getattr(interface, method_name)._schema
+    input_fields = [k for k, f in spec.load_fields.items() if f.required]
+    optional_fields = [k for k, f in spec.load_fields.items() if not f.required]
+    required_output_fileds = list(spec.dump_fields.keys())
+
+    return (
+        input_fields,
+        optional_fields,
+        required_output_fileds
+    )
 
 
-def validate_json_rpc_response_data(response, method_name, specification):
-    _input_fields, _optional_fields, required_output_fileds = specification.get_specifications(
-        interface_name=method_name)
+def validate_json_rpc_response_data(response, method_name, interface):
+
+    required_output_fileds = get_fields(interface, method_name)[-1]
+
     assert 'jsonrpc' in response.data
     for output_field in required_output_fileds:
         assert output_field in response.content
@@ -29,8 +39,7 @@ def test_alice_rpc_character_control_create_policy(alice_rpc_test_client, create
     assert rpc_response.success is True
     assert rpc_response.id == 1
 
-    _input_fields, _optional_fields, required_output_fileds = alice_specification.get_specifications(
-        interface_name=method_name)
+    _input_fields, _optional_fields, required_output_fileds = get_fields(AliceInterface, method_name)
 
     assert 'jsonrpc' in rpc_response.data
     for output_field in required_output_fileds:
@@ -47,11 +56,6 @@ def test_alice_rpc_character_control_create_policy(alice_rpc_test_client, create
     assert rpc_response.success is True
     assert rpc_response.id == 2
 
-    # Send bad data to assert error returns (Request #3)
-    alice_rpc_test_client.crash_on_error = False
-    response = alice_rpc_test_client.send(request={'bogus': 'input'}, malformed=True)
-    assert response.error_code == -32600
-
     # Send a bulk create policy request
     bulk_request = list()
     for i in range(50):
@@ -63,6 +67,14 @@ def test_alice_rpc_character_control_create_policy(alice_rpc_test_client, create
         assert rpc_response.success is True
         assert rpc_response.id == response_id
 
+def test_alice_rpc_character_control_bad_input(alice_rpc_test_client, create_policy_control_request):
+    alice_rpc_test_client.__class__.MESSAGE_ID = 0
+
+    # Send bad data to assert error returns (Request #3)
+    alice_rpc_test_client.crash_on_error = False
+
+    response = alice_rpc_test_client.send(request={'bogus': 'input'}, malformed=True)
+    assert response.error_code == -32600
 
 def test_alice_rpc_character_control_derive_policy_encrypting_key(alice_rpc_test_client):
     method_name = 'derive_policy_encrypting_key'
@@ -71,7 +83,7 @@ def test_alice_rpc_character_control_derive_policy_encrypting_key(alice_rpc_test
     assert response.success is True
     assert validate_json_rpc_response_data(response=response,
                                            method_name=method_name,
-                                           specification=alice_specification)
+                                           interface=AliceInterface)
 
 
 def test_alice_rpc_character_control_grant(alice_rpc_test_client, grant_control_request):
@@ -80,10 +92,11 @@ def test_alice_rpc_character_control_grant(alice_rpc_test_client, grant_control_
     response = alice_rpc_test_client.send(request_data)
     assert validate_json_rpc_response_data(response=response,
                                            method_name=method_name,
-                                           specification=alice_specification)
+                                           interface=AliceInterface)
 
 
 def test_bob_rpc_character_control_join_policy(bob_rpc_controller, join_control_request, enacted_federated_policy):
+
     # Simulate passing in a teacher-uri
     enacted_federated_policy.bob.remember_node(list(enacted_federated_policy.accepted_ursulas)[0])
 
@@ -92,7 +105,7 @@ def test_bob_rpc_character_control_join_policy(bob_rpc_controller, join_control_
     response = bob_rpc_controller.send(request_data)
     assert validate_json_rpc_response_data(response=response,
                                            method_name=method_name,
-                                           specification=bob_specification)
+                                           interface=BobInterface)
 
 
 def test_enrico_rpc_character_control_encrypt_message(enrico_rpc_controller_test_client, encrypt_control_request):
@@ -101,7 +114,7 @@ def test_enrico_rpc_character_control_encrypt_message(enrico_rpc_controller_test
     response = enrico_rpc_controller_test_client.send(request_data)
     assert validate_json_rpc_response_data(response=response,
                                            method_name=method_name,
-                                           specification=enrico_specification)
+                                           interface=EnricoInterface)
 
 
 def test_bob_rpc_character_control_retrieve(bob_rpc_controller, retrieve_control_request):
@@ -110,7 +123,7 @@ def test_bob_rpc_character_control_retrieve(bob_rpc_controller, retrieve_control
     response = bob_rpc_controller.send(request_data)
     assert validate_json_rpc_response_data(response=response,
                                            method_name=method_name,
-                                           specification=bob_specification)
+                                           interface=BobInterface)
 
 
 def test_bob_rpc_character_control_retrieve_with_tmap(
@@ -121,19 +134,16 @@ def test_bob_rpc_character_control_retrieve_with_tmap(
     params['treasure_map'] = tmap_64
     request_data = {'method': method_name, 'params': params}
     response = bob_rpc_controller.send(request_data)
-    assert validate_json_rpc_response_data(response=response,
-                                           method_name=method_name,
-                                           specification=bob_specification)
     assert response.data['result']['cleartexts'][0] == 'Welcome to flippering number 1.'
 
     # Make a wrong (empty) treasure map
 
     wrong_tmap = TreasureMap(m=0)
     wrong_tmap.prepare_for_publication(
-        blockchain_bob.public_keys(DecryptingPower),
-        blockchain_bob.public_keys(SigningPower),
-        blockchain_alice.stamp,
-        b'Wrong!')
+            blockchain_bob.public_keys(DecryptingPower),
+            blockchain_bob.public_keys(SigningPower),
+            blockchain_alice.stamp,
+            b'Wrong!')
     tmap_64 = b64encode(bytes(wrong_tmap)).decode()
     params['treasure_map'] = tmap_64
     with pytest.raises(Ursula.NotEnoughUrsulas):
